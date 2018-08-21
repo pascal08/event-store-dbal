@@ -83,9 +83,28 @@ class DBALEventStore implements EventStore, EventStoreManagement
      */
     public function load($id): DomainEventStream
     {
-        $statement = $this->prepareLoadStatement();
+        $this->loadFromPlayheadToPlayhead($id);
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    public function loadFromPlayhead($id, int $playhead): DomainEventStream
+    {
+        $this->loadFromPlayheadToPlayhead($id, $playhead);
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    public function loadFromPlayheadToPlayhead($id, int $fromPlayhead = 0, int $toPlayhead = 0): DomainEventStream
+    {
+        $statement = $this->prepareLoadStatement($toPlayhead);
         $statement->bindValue(1, $this->convertIdentifierToStorageValue($id));
-        $statement->bindValue(2, 0);
+        $statement->bindValue(2, $fromPlayhead);
+        if($toPlayhead > 0) {
+            $statement->bindValue(3, $toPlayhead);
+        }
         $statement->execute();
 
         $events = [];
@@ -103,25 +122,15 @@ class DBALEventStore implements EventStore, EventStoreManagement
     /**
      * {@inheritDoc}
      */
-    public function loadFromPlayhead($id, int $playhead): DomainEventStream
+    public function replay($id, int $fromPlayhead = 0, ?int $toPlayhead = null): void
     {
-        $statement = $this->prepareLoadStatement();
-        $statement->bindValue(1, $this->convertIdentifierToStorageValue($id));
-        $statement->bindValue(2, $playhead);
-        $statement->execute();
-
-        $events = [];
-        while ($row = $statement->fetch()) {
-            $events[] = $this->deserializeEvent($row);
-        }
-
-        return new DomainEventStream($events);
+        //
     }
 
     /**
      * {@inheritDoc}
      */
-    public function append($id, DomainEventStream $eventStream)
+    public function append($id, DomainEventStream $eventStream): void
     {
         // noop to ensure that an error will be thrown early if the ID
         // is not something that can be converted to a string. If we
@@ -211,13 +220,14 @@ class DBALEventStore implements EventStore, EventStoreManagement
         return $table;
     }
 
-    private function prepareLoadStatement()
+    private function prepareLoadStatement($toPlayhead = null)
     {
         if (null === $this->loadStatement) {
             $query = 'SELECT uuid, playhead, metadata, payload, recorded_on
                 FROM ' . $this->tableName . '
                 WHERE uuid = ?
                 AND playhead >= ?
+                ' . $toPlayhead ? ' AND playhead <= ? ' : '' . '
                 ORDER BY playhead ASC';
             $this->loadStatement = $this->connection->prepare($query);
         }
@@ -266,7 +276,7 @@ class DBALEventStore implements EventStore, EventStoreManagement
         return $id;
     }
 
-    public function visitEvents(Criteria $criteria, EventVisitor $eventVisitor)
+    public function visitEvents(Criteria $criteria, EventVisitor $eventVisitor): void
     {
         $statement = $this->prepareVisitEventsStatement($criteria);
         $statement->execute();
